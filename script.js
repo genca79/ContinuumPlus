@@ -634,6 +634,8 @@ const FACTORY_FOLDER_LIBRARY = {
     'Violin Experiments': 'samples/Violin Experiments/',
     'Zither': 'samples/Zither/'
 };
+let factoryFolderManifestCache = null;
+let factoryFolderManifestPromise = null;
 const DEFAULT_ARTICULATION_RULE = {
     mode: 'manual',
     keyswitchLow: 24,
@@ -1308,6 +1310,26 @@ function isFactoryAudioFile(pathname) {
     return /\.(wav|flac)$/i.test(String(pathname || ''));
 }
 
+async function loadFactoryFolderManifest() {
+    if (factoryFolderManifestCache) return factoryFolderManifestCache;
+    if (factoryFolderManifestPromise) return factoryFolderManifestPromise;
+    factoryFolderManifestPromise = (async () => {
+        try {
+            const res = await fetch('samples/factory-manifest.json', { cache: 'no-store' });
+            if (!res.ok) return null;
+            const data = await res.json();
+            if (!data || typeof data !== 'object') return null;
+            factoryFolderManifestCache = data;
+            return factoryFolderManifestCache;
+        } catch (err) {
+            return null;
+        } finally {
+            factoryFolderManifestPromise = null;
+        }
+    })();
+    return factoryFolderManifestPromise;
+}
+
 function parseGithubPagesFolderInfo(url) {
     try {
         const u = new URL(url, window.location.href);
@@ -1430,7 +1452,15 @@ async function buildFactoryPresetFromFolder(setName) {
     const folder = FACTORY_FOLDER_LIBRARY[setName];
     if (!folder) return null;
 
-    const files = await collectFactoryFilesFromDirectory(folder, 4);
+    let files = [];
+    const manifest = await loadFactoryFolderManifest();
+    const manifestList = manifest && Array.isArray(manifest[setName]) ? manifest[setName] : null;
+    if (manifestList && manifestList.length) {
+        const base = new URL(window.location.href);
+        files = manifestList.map(rel => new URL(String(rel || '').replace(/^\/+/, ''), base).toString());
+    } else {
+        files = await collectFactoryFilesFromDirectory(folder, 4);
+    }
     const sorted = files
         .map(url => ({
             url,
