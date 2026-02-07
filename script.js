@@ -1331,9 +1331,23 @@ async function collectFactoryFilesFromGithubApi(dirUrl, maxDepth = 3, visited = 
     if (visited.has(visitKey)) return [];
     visited.add(visitKey);
 
-    const apiUrl = `https://api.github.com/repos/${encodeURIComponent(info.owner)}/${encodeURIComponent(info.repo)}/contents/${info.repoPath}`;
+    const encodedPath = info.repoPath
+        .split('/')
+        .filter(Boolean)
+        .map(p => encodeURIComponent(p))
+        .join('/');
+    const apiUrl = `https://api.github.com/repos/${encodeURIComponent(info.owner)}/${encodeURIComponent(info.repo)}/contents/${encodedPath}`;
     const response = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!response.ok) throw new Error(`GitHub API folder not reachable: ${apiUrl}`);
+    if (!response.ok) {
+        let detail = `status ${response.status}`;
+        try {
+            const payload = await response.json();
+            if (payload && payload.message) detail = `${detail}: ${payload.message}`;
+        } catch (err) {
+            // keep default detail
+        }
+        throw new Error(`GitHub API folder not reachable: ${apiUrl} (${detail})`);
+    }
     const entries = await response.json();
     if (!Array.isArray(entries)) return [];
 
@@ -1371,7 +1385,7 @@ async function collectFactoryFilesFromDirectory(dirUrl, maxDepth = 3, visited = 
             try {
                 return await collectFactoryFilesFromGithubApi(normalized, maxDepth, visited);
             } catch (err) {
-                throw new Error(`Folder not reachable: ${normalized}`);
+                throw new Error(`Folder not reachable: ${normalized} | ${err?.message || 'github fallback failed'}`);
             }
         }
         throw new Error(`Folder not reachable: ${normalized}`);
