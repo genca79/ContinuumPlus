@@ -1308,13 +1308,74 @@ function isFactoryAudioFile(pathname) {
     return /\.(wav|flac)$/i.test(String(pathname || ''));
 }
 
+function parseGithubPagesFolderInfo(url) {
+    try {
+        const u = new URL(url, window.location.href);
+        const host = String(u.hostname || '').toLowerCase();
+        if (!host.endsWith('.github.io')) return null;
+        const owner = host.split('.github.io')[0];
+        const parts = (u.pathname || '/').split('/').filter(Boolean);
+        if (parts.length < 2) return null;
+        const repo = parts[0];
+        const repoPath = parts.slice(1).join('/');
+        return { owner, repo, repoPath };
+    } catch (err) {
+        return null;
+    }
+}
+
+async function collectFactoryFilesFromGithubApi(dirUrl, maxDepth = 3, visited = new Set()) {
+    const info = parseGithubPagesFolderInfo(dirUrl);
+    if (!info || maxDepth < 0) return [];
+    const visitKey = `${info.owner}/${info.repo}/${info.repoPath}`;
+    if (visited.has(visitKey)) return [];
+    visited.add(visitKey);
+
+    const apiUrl = `https://api.github.com/repos/${encodeURIComponent(info.owner)}/${encodeURIComponent(info.repo)}/contents/${info.repoPath}`;
+    const response = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!response.ok) throw new Error(`GitHub API folder not reachable: ${apiUrl}`);
+    const entries = await response.json();
+    if (!Array.isArray(entries)) return [];
+
+    const files = [];
+    for (const entry of entries) {
+        if (!entry || typeof entry !== 'object') continue;
+        const type = entry.type || '';
+        if (type === 'file') {
+            const dl = entry.download_url || '';
+            if (isFactoryAudioFile(dl)) files.push(dl);
+            continue;
+        }
+        if (type === 'dir' && maxDepth > 0) {
+            const nestedUrl = entry.html_url || `${new URL(dirUrl, window.location.href).origin}/${info.repo}/${entry.path}`;
+            try {
+                const nested = await collectFactoryFilesFromGithubApi(nestedUrl, maxDepth - 1, visited);
+                files.push(...nested);
+            } catch (err) {
+                // Ignore single nested folder errors and continue collecting others.
+            }
+        }
+    }
+    return files;
+}
+
 async function collectFactoryFilesFromDirectory(dirUrl, maxDepth = 3, visited = new Set()) {
     const normalized = new URL(dirUrl, window.location.href).toString();
     if (visited.has(normalized) || maxDepth < 0) return [];
     visited.add(normalized);
 
     const response = await fetch(normalized);
-    if (!response.ok) throw new Error(`Folder not reachable: ${normalized}`);
+    if (!response.ok) {
+        const githubInfo = parseGithubPagesFolderInfo(normalized);
+        if (githubInfo) {
+            try {
+                return await collectFactoryFilesFromGithubApi(normalized, maxDepth, visited);
+            } catch (err) {
+                throw new Error(`Folder not reachable: ${normalized}`);
+            }
+        }
+        throw new Error(`Folder not reachable: ${normalized}`);
+    }
     const html = await response.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const anchors = Array.from(doc.querySelectorAll('a[href]'));
